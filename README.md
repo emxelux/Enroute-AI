@@ -1,4 +1,4 @@
-# TripMate - AI Travel Planner Agent
+# Enroute-AI - AI Travel Planner Agent
 
 ## How to run?
 
