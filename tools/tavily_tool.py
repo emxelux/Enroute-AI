@@ -29,5 +29,3 @@ def tavily_search(query):
         {content}
         """)
     return "\n\n".join(results)
-
-

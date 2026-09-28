@@ -1,8 +1,8 @@
 import os
 from dotenv import load_dotenv
 import requests as rt
-import serpapi
 from langchain.tools import tool
+
 load_dotenv()
 
 
@@ -10,7 +10,7 @@ os.environ["DUFFEL_ACCESS_TOKEN"] = os.getenv("DUFFEL_ACCESS_TOKEN")
 
 from Duffel.duffelpy import Duffel
 
-
+@tool
 def search_flight(
     origin_airport:str, 
     destination_airport:str,
@@ -38,7 +38,7 @@ def search_flight(
             cabin_class=cabin_class,
             passengers=[
                 {"type": "adult", "adult": no_of_adult},
-                {"type": "children", "adult": no_of_children}
+                {"type": "child", "child": no_of_children}
             ]        
         )
 
@@ -59,7 +59,7 @@ def search_flight(
             ],
             cabin_class=cabin_class,
             passengers=[
-                {"type": "children", "adult": no_of_children}
+                {"type": "child", "child": no_of_children}
             ]        
         )
     relevant_flights = []
@@ -70,5 +70,4 @@ def search_flight(
 
             if (origin_iata == origin_airport) and (destination_iata == destination_airport):
                 relevant_flights.append(offers)
-    
-    
+    return relevant_flights

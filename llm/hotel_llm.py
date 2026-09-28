@@ -6,4 +6,4 @@ llm = init_chat_model(
     "groq:openai/gpt-oss-120b"
 )
 
-h_llm = h_llm.bind_tools([search_hotels])
+hotel_llm = llm.bind_tools([search_hotels])

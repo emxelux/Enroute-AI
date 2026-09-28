@@ -30,7 +30,7 @@ def search_hotels(name: str, check_in_date: str, check_out_date:str) -> list:
     hotels = []
     for hotel in properties:
         hotel_name = hotel["name"]
-        hotel_link = hotel['Property_details_link']
+        # hotel_link = hotel['Property_details_link']
         nearby_places = hotel["nearby_places"]
         ratings = hotel["ratings"]
         total_score = sum(item["stars"] * item["count"] for item in ratings)
@@ -38,7 +38,7 @@ def search_hotels(name: str, check_in_date: str, check_out_date:str) -> list:
         average_rating = total_score / total_reviews if total_reviews > 0 else 0.0
         hotel_data = {
             "hotel_name": hotel_name,
-            "hotel_link": hotel_link,
+            # "hotel_link": hotel_link,
             "nearby_places": nearby_places,
             "hotel_rating": average_rating
         }
