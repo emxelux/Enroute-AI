@@ -10,6 +10,7 @@ requires-python = ">=3.13"
 dependencies = [
     "airportsdata==20260315",
     "aviationstack-mcp>=1.8.1",
+    "email-validator>=2.3.0",
     "fastapi==0.136.3",
     "geopy>=2.5.0",
     "jinja2==3.1.6",
@@ -21,10 +22,13 @@ dependencies = [
     "langgraph-checkpoint-postgres==3.1.0",
     "psycopg-pool==3.3.1",
     "psycopg[binary]==3.3.4",
+    "pwdlib[argon2]>=0.3.1",
     "pycountry==26.2.16",
+    "pyjwt>=2.14.0",
     "python-dotenv==1.2.2",
     "requests==2.34.2",
     "serpapi>=1.1.1",
+    "sqlalchemy>=2.0.54",
     "tavily-python==0.7.24",
     "uvicorn==0.48.0",
 ]
