@@ -18,4 +18,10 @@ NOT travel-related:
 - Shopping (unless travel shopping)
 - News, politics, sports
 
+#### Classify user's query and respond in valid json format
+e.g
+
+
+'{"is_travel": True}'
+
 ### Respond with boolean: True or False

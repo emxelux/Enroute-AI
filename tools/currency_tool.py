@@ -197,7 +197,6 @@ def convert_currency(
         }
 
 
-@tool
 def detect_currency_from_text(text: str) -> dict:
     """
     Detect currency codes and amounts mentioned in text (e.g., from flight/hotel responses).

@@ -10,6 +10,62 @@ os.environ["DUFFEL_ACCESS_TOKEN"] = os.getenv("DUFFEL_ACCESS_TOKEN")
 
 from Duffel.duffelpy import Duffel
 
+
+def _compact_offer(offer: dict) -> dict:
+    """Keep only the offer and itinerary details needed for selection/booking."""
+    slices = []
+
+    for flight_slice in offer.get("slices", []):
+        segments = flight_slice.get("segments", [])
+        origin = flight_slice.get("origin", {})
+        destination = flight_slice.get("destination", {})
+        first_segment = segments[0] if segments else {}
+        last_segment = segments[-1] if segments else {}
+        carrier = (
+            first_segment.get("operating_carrier")
+            or first_segment.get("marketing_carrier")
+            or {}
+        )
+
+        slices.append({
+            "slice_id": flight_slice.get("id"),
+            "origin": {
+                "code": origin.get("iata_code"),
+                "airport": origin.get("name"),
+            },
+            "destination": {
+                "code": destination.get("iata_code"),
+                "airport": destination.get("name"),
+            },
+            "departure": first_segment.get("departing_at"),
+            "arrival": last_segment.get("arriving_at"),
+            "stops": max(
+                len(segments) - 1,
+                sum(len(segment.get("stops", [])) for segment in segments),
+            ),
+            "airline": carrier.get("name"),
+            "flight_numbers": [
+                segment.get("marketing_carrier_flight_number")
+                for segment in segments
+                if segment.get("marketing_carrier_flight_number")
+            ],
+        })
+
+    trip_type = {
+        1: "one-way",
+        2: "round-trip",
+    }.get(len(slices), "multi-city")
+
+    return {
+        "offer_id": offer.get("id"),
+        "expires_at": offer.get("expires_at"),
+        "total_amount": offer.get("total_amount"),
+        "total_currency": offer.get("total_currency"),
+        "trip_type": trip_type,
+        "slices": slices,
+    }
+
+
 @tool
 def search_flight(
     origin_airport:str, 
@@ -62,12 +118,17 @@ def search_flight(
                 {"type": "child", "child": no_of_children}
             ]        
         )
-    relevant_flights = []
-    for offers in offer_request["offers"]:
-        for flight in offers["slices"]:
-            origin_iata = flight["origin"]["iata_code"]
-            destination_iata = flight["destination"]['iata_code']
+    relevant_flights = [
+        offer
+        for offer in offer_request.get("offers", [])
+        if any(
+            flight_slice.get("origin", {}).get("iata_code") == origin_airport
+            and flight_slice.get("destination", {}).get("iata_code") == destination_airport
+            for flight_slice in offer.get("slices", [])
+        )
+    ]
+    relevant_flights.sort(
+        key=lambda offer: float(offer.get("total_amount") or "inf")
+    )
 
-            if (origin_iata == origin_airport) and (destination_iata == destination_airport):
-                relevant_flights.append(offers)
-    return relevant_flights
+    return [_compact_offer(offer) for offer in relevant_flights[:3]]

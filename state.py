@@ -7,6 +7,7 @@ from dataclasses import field
 class TravelState(MessagesState):
     user_id: Optional[str] = None
     user_country: Optional[str] = None
+    user_query: Optional[str] = None
     trip_details: Dict[str, Any] = field(
         default_factory=dict
     )
