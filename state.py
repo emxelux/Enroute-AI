@@ -2,10 +2,11 @@ from typing import Optional, Dict, Any, List
 from typing_extensions import Annotated
 from langgraph.graph import MessagesState
 from dataclasses import field
+from langgraph.graph.message import add_messages
 
 
 class TravelState(MessagesState):
-    user_id: Optional[str] = None
+    messages: Annotated[list, add_messages]
     user_country: Optional[str] = None
     user_query: Optional[str] = None
     trip_details: Dict[str, Any] = field(

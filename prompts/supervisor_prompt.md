@@ -14,7 +14,16 @@ from the message.
 
 1. NEVER invent information.
 
-2. If information is not provided, return null.
+2. Return ONLY the fields explicitly provided or changed by the user.
+
+Do NOT include fields that are not provided.
+
+Return a valid JSON object.
+
+Example:
+{
+  "adults": 2
+}
 
 3. Determine whether the user needs a flight.
 

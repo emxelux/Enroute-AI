@@ -1,6 +1,6 @@
 from tavily import TavilyClient
-import os
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
@@ -8,8 +8,16 @@ client = TavilyClient(
     api_key=os.getenv("TAVILY_API_KEY")
 )
 
-
-def tavily_search(query):
+# @tool
+def tavily_search(query: str) -> str:
+    """Search the web for information.
+    
+    Args:
+        query: The search string query to look up on the web.
+    """
+    if not query or not isinstance(query, str):
+        return "Error: Invalid query provided."
+        
     response = client.search(
         query=query,
         max_results=5

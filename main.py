@@ -39,3 +39,7 @@ with PostgresSaver.from_conn_string(DB_URL) as checkpointer:
         )
         print("\n--- RESUMED RUN ---")
         print(resumed_result)
+    else:
+        import json
+        with open("testing_flight.json", "w") as f:
+            json.dump(result, f)
