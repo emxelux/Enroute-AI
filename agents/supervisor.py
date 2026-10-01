@@ -109,7 +109,7 @@ def supervisor_node(state: TravelState):
         needs_flight = travel_info["needs_flight"]
         needs_hotel = travel_info["needs_hotel"]
         
-        if ("MISSING" in list(travel_info.values())) or ("MISSING" in list(travel_info["needs_hotel"].values())):
+        if ("MISSING" in list(travel_info.values())) or (needs_hotel["MISSING"]):
             missing_info = travel_info["missing_information"]
 
             # HITL: pause the workflow and ask the user for the missing info.
@@ -132,10 +132,18 @@ def supervisor_node(state: TravelState):
                 "hotel_location": travel_info["hotel_location"],
                 "hotel_check_in": travel_info["hotel_check_in"],
                 "hotel_check_out": travel_info["hotel_check_out"],
+                "hotel_location": travel_info["hotel_location"],
             }
+        return {
+            "messages": state["messages"] + [AIMessage(content="Travel information extracted successfully.")],
+            "flight_origin": travel_info["flight_origin"],
+            "flight_destination": travel_info["flight_destination"],
+            "flight_departure_date": travel_info["flight_departure_date"],
+            "flight_return_date": travel_info["flight_return_date"],
+        }
 
     except Exception as e:
-        pass
+        print(f"Error extracting travel information: {e}")
 
 
 

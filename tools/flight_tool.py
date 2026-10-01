@@ -66,7 +66,7 @@ def _compact_offer(offer: dict) -> dict:
     }
 
 
-@tool
+# @tool
 def search_flight(
     origin_airport:str, 
     destination_airport:str,
@@ -132,3 +132,4 @@ def search_flight(
     )
 
     return [_compact_offer(offer) for offer in relevant_flights[:3]]
+# print(search_flight("LOS", "MAN", "economy", "2026-10-15", no_of_adult=1, no_of_children=0))
