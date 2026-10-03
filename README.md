@@ -163,6 +163,12 @@ The original sketch does not name technologies. This is a suggested fit:
 | Payment | Duffel Payments, Stripe, or another provider |
 | Deployment | Docker, AWS (EC2 and RDS) or GCP |
 
+### LLM provider fallback
+
+The agents use Groq as the primary provider and retry a request with Gemini when Groq reports a rate limit or quota exhaustion (HTTP 429). Set `GROQ_API_KEY` and either `GOOGLE_API_KEY` or `GEMINI_API_KEY` in the environment. To make Gemini primary instead, set `LLM_PRIMARY_PROVIDER=gemini`.
+
+Model defaults can be overridden with `GROQ_SUPERVISOR_MODEL`, `GROQ_FLIGHT_MODEL`, `GROQ_HOTEL_MODEL`, `GEMINI_SUPERVISOR_MODEL`, `GEMINI_FLIGHT_MODEL`, and `GEMINI_HOTEL_MODEL`. `GEMINI_MODEL` overrides all Gemini task models unless a task-specific value is set.
+
 ---
 
 ## 6. Open questions

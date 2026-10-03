@@ -7,7 +7,8 @@ from langgraph.types import Command
 from langgraph.prebuilt import ToolNode
 
 from state import TravelState
-from llm.hotel_llm import hotel_llm
+from llm.hotel_llm import hotel_llm, hotel_fallback_llm
+from llm.provider import invoke_with_rate_limit_fallback
 from tools.hotel_tool import search_hotels
 from tools.currency_tool import convert_currency, convert_detected_currencies
 
@@ -18,6 +19,7 @@ hotel_tool_node = ToolNode(hotel_tools)
 
 # Bind tools to LLM
 hotel_llm_with_tools = hotel_llm.bind_tools(hotel_tools)
+hotel_fallback_llm_with_tools = hotel_fallback_llm.bind_tools(hotel_tools)
 
 
 HOTEL_AGENT_PROMPT = """You are the Hotel Sub-Agent. Help users find and book hotels.
@@ -54,7 +56,11 @@ def hotel_agent_node(state: TravelState) -> Command[Literal["hotel_tools", "supe
     llm_messages = [system_msg] + messages
 
     # Invoke LLM with tools
-    response = hotel_llm_with_tools.invoke(llm_messages)
+    response = invoke_with_rate_limit_fallback(
+        hotel_llm_with_tools,
+        hotel_fallback_llm_with_tools,
+        llm_messages,
+    )
 
     # Check if LLM wants to use tools
     if response.tool_calls:

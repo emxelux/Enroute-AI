@@ -7,6 +7,7 @@ from langgraph.graph.message import add_messages
 
 class TravelState(MessagesState):
     messages: Annotated[list, add_messages]
+    thread_id: Optional[str] = None
     user_country: Optional[str] = None
     user_query: Optional[str] = None
     trip_details: Dict[str, Any] = field(

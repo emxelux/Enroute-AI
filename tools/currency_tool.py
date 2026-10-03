@@ -229,6 +229,7 @@ def detect_currency_from_text(text: str) -> dict:
             matches = re.findall(pattern, text, re.IGNORECASE)
             for match in matches:
                 try:
+                    
                     amount = float(match.replace(",", ""))
                     detected.append({
                         "currency": currency,
@@ -283,5 +284,5 @@ def convert_detected_currencies(
 
     return {
         "conversions": conversions,
-        "target_currency": target_currency or get_currency_from_country(user_country) if user_currency else "USD"
+        "target_currency": target_currency or get_currency_from_country(user_country) if user_country else "USD"
     }

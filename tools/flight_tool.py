@@ -1,12 +1,11 @@
 import os
 from dotenv import load_dotenv
-import requests as rt
-from langchain.tools import tool
 
 load_dotenv()
 
-
-os.environ["DUFFEL_ACCESS_TOKEN"] = os.getenv("DUFFEL_ACCESS_TOKEN")
+duffel_access_token = os.getenv("DUFFEL_ACCESS_TOKEN")
+if duffel_access_token:
+    os.environ["DUFFEL_ACCESS_TOKEN"] = duffel_access_token
 
 from Duffel.duffelpy import Duffel
 
@@ -68,12 +67,13 @@ def _compact_offer(offer: dict) -> dict:
 
 # @tool
 def search_flight(
-    origin_airport:str, 
+    origin_airport:str,
     destination_airport:str,
-    cabin_class:str,
+    cabin_class:str | None,
     departure_date: str,
-    no_of_adult: int = None,
-    no_of_children:int = None,
+    return_date: str | None = None,
+    no_of_adult: int = 1,
+    no_of_children:int | None = 0,
     ):
     """
     Search for available flight in real-time.
@@ -82,54 +82,53 @@ def search_flight(
     destination_airport:str = 3 letter IATA airport code of the destination airport,
     cabin_class:str = One of ["economy", "premium_economy", "business", "first" ],
     departure_date:str = Departure date of the flight in strictly in YYYY-MM-DD format,
-    no_of_adult:int= (Optional) if there is adult, number of adult,
-    no_of_children:int = (Optional) if there is children onboard, number of children
+    return_date:str = (Optional) return date in YYYY-MM-DD format,
+    no_of_adult:int= number of adults,
+    no_of_children:int = number of children
     """
-    client = Duffel()
-    if no_of_children and no_of_adult:
-        offer_request = client.create_offer_request(
-            slices = [
-                {"origin": origin_airport, "destination": destination_airport, "departure_date": departure_date}
-            ],
-            cabin_class=cabin_class,
-            passengers=[
-                {"type": "adult", "adult": no_of_adult},
-                {"type": "child", "child": no_of_children}
-            ]        
-        )
+    if no_of_adult < 0 or no_of_children < 0:
+        raise ValueError("Passenger counts cannot be negative")
+    if no_of_adult + no_of_children == 0:
+        raise ValueError("At least one passenger is required")
 
-    if not no_of_children and no_of_adult:
-        offer_request = client.create_offer_request(
-            slices = [
-                {"origin": origin_airport, "destination": destination_airport, "departure_date": departure_date}
-            ],
-            cabin_class=cabin_class,
-            passengers=[
-                {"type": "adult", "adult": no_of_adult},
-            ]        
-        )
-    if no_of_children and not no_of_adult:
-        offer_request = client.create_offer_request(
-            slices = [
-                {"origin": origin_airport, "destination": destination_airport, "departure_date": departure_date}
-            ],
-            cabin_class=cabin_class,
-            passengers=[
-                {"type": "child", "child": no_of_children}
-            ]        
-        )
+    client = Duffel()
+    slices = [{
+        "origin": origin_airport,
+        "destination": destination_airport,
+        "departure_date": departure_date,
+    }]
+    if return_date:
+        slices.append({
+            "origin": destination_airport,
+            "destination": origin_airport,
+            "departure_date": return_date,
+        })
+
+    passengers = ([{"type": "adult"}] * no_of_adult) + ([{"type": "child"}] * no_of_children)
+    offer_request = client.create_offer_request(
+        slices=slices,
+        cabin_class=cabin_class,
+        passengers=passengers,
+    )
+
     relevant_flights = [
         offer
         for offer in offer_request.get("offers", [])
-        if any(
-            flight_slice.get("origin", {}).get("iata_code") == origin_airport
-            and flight_slice.get("destination", {}).get("iata_code") == destination_airport
-            for flight_slice in offer.get("slices", [])
-        )
+        if offer.get("slices")
+        and offer["slices"][0].get("origin", {}).get("iata_code") == origin_airport
+        and offer["slices"][0].get("destination", {}).get("iata_code") == destination_airport
     ]
     relevant_flights.sort(
         key=lambda offer: float(offer.get("total_amount") or "inf")
     )
 
     return [_compact_offer(offer) for offer in relevant_flights[:3]]
-# print(search_flight("LOS", "MAN", "economy", "2026-10-15", no_of_adult=1, no_of_children=0))
+
+ans = search_flight(origin_airport = "ABV", 
+destination_airport="MAN", 
+cabin_class="business", departure_date="2026-10-31")
+
+if ans:
+    import json
+    with open("flight_out.json", "w") as f:
+        json.dump(ans, f, indent=4)
