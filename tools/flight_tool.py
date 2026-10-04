@@ -10,7 +10,7 @@ if duffel_access_token:
 from Duffel.duffelpy import Duffel
 
 
-def _compact_offer(offer: dict) -> dict:
+def _compact_offer(offer: dict, offer_request_passengers: list[dict] | None = None) -> dict:
     """Keep only the offer and itinerary details needed for selection/booking."""
     slices = []
 
@@ -55,7 +55,7 @@ def _compact_offer(offer: dict) -> dict:
         2: "round-trip",
     }.get(len(slices), "multi-city")
 
-    return {
+    result = {
         "offer_id": offer.get("id"),
         "expires_at": offer.get("expires_at"),
         "total_amount": offer.get("total_amount"),
@@ -63,6 +63,9 @@ def _compact_offer(offer: dict) -> dict:
         "trip_type": trip_type,
         "slices": slices,
     }
+    if offer_request_passengers:
+        result["passengers"] = offer_request_passengers
+    return result
 
 
 # @tool
@@ -111,6 +114,9 @@ def search_flight(
         passengers=passengers,
     )
 
+    # Extract passenger IDs from the offer request for later booking
+    offer_request_passengers = offer_request.get("passengers", [])
+
     relevant_flights = [
         offer
         for offer in offer_request.get("offers", [])
@@ -122,13 +128,136 @@ def search_flight(
         key=lambda offer: float(offer.get("total_amount") or "inf")
     )
 
-    return [_compact_offer(offer) for offer in relevant_flights[:3]]
+    return [_compact_offer(offer, offer_request_passengers) for offer in relevant_flights[:3]]
 
-ans = search_flight(origin_airport = "ABV", 
-destination_airport="MAN", 
-cabin_class="business", departure_date="2026-10-31")
+# ans = search_flight(origin_airport = "ABV", 
+# destination_airport="MAN", 
+# cabin_class="business", departure_date="2026-10-31")
 
-if ans:
-    import json
-    with open("flight_out.json", "w") as f:
-        json.dump(ans, f, indent=4)
+# if ans:
+#     import json
+#     with open("flight_out.json", "w") as f:
+#         json.dump(ans, f, indent=4)
+
+
+def book_flight(
+    offer_id: str,
+    passengers: list[dict],
+    payments: list[dict] | None = None,
+    hold: bool = True,
+    services: list[dict] | None = None,
+) -> dict:
+    """
+    Book a flight offer using Duffel's order creation API (API v2).
+
+    Args:
+        offer_id: The ID of the offer to book
+        passengers: List of passenger details. Each must include:
+            - id (required): Passenger ID from the offer request
+            - title: mr, mrs, ms, miss, mstr, etc.
+            - given_name: First name
+            - family_name: Last name
+            - born_on: Date of birth (YYYY-MM-DD)
+            - gender: "m", "f", or "x"
+            - email: Email address
+            - phone_number: E.164 format (e.g., "+1234567890")
+            - identity_documents (optional): List of {type, unique_identifier, issuing_country_code, expires_on}
+            - loyalty_programme_accounts (optional): List of {airline_iata_code, account_number}
+        payments: Required when hold=False. List of payment objects:
+            - type: "balance" | "card" | "arc_bsp_cash"
+            - amount: String amount (e.g., "30.20")
+            - currency: ISO 4217 code (e.g., "GBP")
+            - three_d_secure_session_id: Required for card payments
+        hold: If True, creates a hold order (no payment required). If False, creates instant order requiring payment.
+        services: Optional ancillary services [{id, quantity}]
+
+    Returns:
+        Order details including booking reference, tickets, etc.
+    """
+    client = Duffel()
+
+    # Create the order with the selected offer and passenger details
+    order_request = client.create_order(
+        selected_offers=[offer_id],
+        passengers=passengers,
+        payments=payments,
+        services=services,
+        hold=hold,
+    )
+
+    return order_request
+
+
+def build_passenger_for_booking(
+    offer_request_passenger: dict,
+    passenger_details: dict,
+) -> dict:
+    """
+    Build a passenger object for Duffel order creation.
+
+    Args:
+        offer_request_passenger: The passenger object from the offer request (must contain 'id')
+        passenger_details: Dictionary with passenger details:
+            - title: "mr", "mrs", "ms", "miss", "mstr"
+            - given_name: First name
+            - family_name: Last name
+            - born_on: "YYYY-MM-DD"
+            - gender: "m", "f", or "x"
+            - email: Email address
+            - phone_number: E.164 format
+            - identity_documents (optional): List of identity document dicts
+            - loyalty_programme_accounts (optional): List of loyalty programme dicts
+
+    Returns:
+        Passenger dict formatted for Duffel API v2 order creation
+    """
+    passenger = {
+        "id": offer_request_passenger["id"],
+        "title": passenger_details.get("title", "mr"),
+        "given_name": passenger_details["given_name"],
+        "family_name": passenger_details["family_name"],
+        "born_on": passenger_details["born_on"],
+        "gender": passenger_details["gender"],
+        "email": passenger_details["email"],
+        "phone_number": passenger_details["phone_number"],
+    }
+
+    # Add optional identity documents if provided
+    if passenger_details.get("identity_documents"):
+        passenger["identity_documents"] = passenger_details["identity_documents"]
+
+    # Add optional loyalty programme accounts if provided
+    if passenger_details.get("loyalty_programme_accounts"):
+        passenger["loyalty_programme_accounts"] = passenger_details["loyalty_programme_accounts"]
+
+    return passenger
+
+
+def build_payment(
+    payment_type: str,
+    amount: str,
+    currency: str,
+    three_d_secure_session_id: str | None = None,
+) -> dict:
+    """
+    Build a payment object for Duffel order creation.
+
+    Args:
+        payment_type: "balance" | "card" | "arc_bsp_cash"
+        amount: Amount as string (e.g., "30.20")
+        currency: ISO 4217 currency code (e.g., "GBP")
+        three_d_secure_session_id: Required for card payments
+
+    Returns:
+        Payment dict formatted for Duffel API v2
+    """
+    payment = {
+        "type": payment_type,
+        "amount": amount,
+        "currency": currency,
+    }
+
+    if payment_type == "card" and three_d_secure_session_id:
+        payment["three_d_secure_session_id"] = three_d_secure_session_id
+
+    return payment

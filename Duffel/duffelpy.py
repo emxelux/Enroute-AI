@@ -198,13 +198,13 @@ class Duffel:
     def create_order(
         self,
         selected_offers: List[str],  # exactly one offer id
-        passengers: List[dict],      # each needs the passenger `id` from the offer request
-        payments: Optional[List[dict]] = None,  # [{type, amount, currency}]; type: balance | arc_bsp_cash
+        passengers: List[dict],      # each needs the passenger `id` from the offer request + full details
+        payments: Optional[List[dict]] = None,  # [{type, amount, currency}]; type: balance | card | arc_bsp_cash
         services: Optional[List[dict]] = None,  # [{id, quantity}]
         metadata: Optional[dict] = None,
-        hold: bool = False,  # True = hold order (no payments), pay later with create_payment
+        hold: bool = True,  # True = hold order (no payments), pay later with create_payment
     ) -> dict:
-        """POST /air/orders. Note: v2 removed `passengers[].type`, do not send it."""
+        """POST /air/orders. Note: v2 requires passenger `id` from offer request, no `type` field."""
         if len(selected_offers) != 1:
             raise ValueError("selected_offers must contain exactly one offer id")
         body: Dict[str, Any] = {

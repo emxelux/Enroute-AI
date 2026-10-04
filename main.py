@@ -1,37 +1,67 @@
 import os
 import uuid
+
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
-from langchain_core.messages import HumanMessage
+
 from agents.graph import create_travel_graph
 
 load_dotenv()
 
+
 def _print_interrupt(interrupt_value: dict) -> None:
-    """Display a human-readable interrupt question and any offered choices."""
+    """Display an interrupt prompt and any options supplied by a graph node."""
     print(f"\n{interrupt_value.get('question', 'More information is needed.')}")
 
-    if interrupt_value.get("type") == "flight_selection":
-        for index, flight in enumerate(interrupt_value.get("options", []), start=1):
+    options = interrupt_value.get("options")
+    if not options:
+        return
+
+    if isinstance(options, dict):
+        option_items = options.items()
+    elif isinstance(options, list):
+        option_items = enumerate(options, start=1)
+    else:
+        print(options)
+        return
+
+    for option_id, option in option_items:
+        if interrupt_value.get("type") == "flight_selection" and isinstance(option, dict):
             route_parts = []
-            for slice_info in flight.get("slices", []):
+            for slice_info in option.get("slices", []):
                 origin = slice_info.get("origin", {}).get("code", "?")
                 destination = slice_info.get("destination", {}).get("code", "?")
                 departure = slice_info.get("departure") or "time unavailable"
                 arrival = slice_info.get("arrival") or "time unavailable"
-                route_parts.append(f"{origin} → {destination} ({departure}–{arrival})")
+                route_parts.append(
+                    f"{origin} → {destination} ({departure}–{arrival})"
+                )
 
-            print(
-                f"{index}. {'; '.join(route_parts)} | "
-                f"{flight.get('total_amount', '?')} {flight.get('total_currency', '')} | "
-                f"Offer ID: {flight.get('offer_id', '?')}"
+            route = "; ".join(route_parts) or "Route unavailable"
+            price = (
+                f"{option.get('total_amount', '?')} "
+                f"{option.get('total_currency', '')}"
+            ).strip()
+
+            print(f"- {option_id}: {route} | {price}")
+        elif isinstance(option, dict):
+            description = (
+                option.get("label")
+                or option.get("name")
+                or option.get("description")
+                or option
             )
+            print(f"- {option_id}: {description}")
+        else:
+            print(f"- {option_id}: {option}")
 
 
 def _print_result(result: dict) -> None:
     """Print the latest assistant response and selected flight, if present."""
     print("\n--- TRIP PLANNING RESULT ---")
+
     for message in reversed(result.get("messages", [])):
         content = getattr(message, "content", None)
         if content and message.__class__.__name__ == "AIMessage":
@@ -42,7 +72,10 @@ def _print_result(result: dict) -> None:
     if selected:
         print("\nSelected flight:")
         print(f"Offer ID: {selected.get('offer_id', 'unknown')}")
-        print(f"Price: {selected.get('total_amount', '?')} {selected.get('total_currency', '')}")
+        print(
+            f"Price: {selected.get('total_amount', '?')} "
+            f"{selected.get('total_currency', '')}"
+        )
 
 
 def main() -> None:
@@ -67,16 +100,18 @@ def main() -> None:
             config=config,
         )
 
-        # Every interrupt pauses the graph. Submit the user's answer to resume
-        # the same checkpoint/thread until the workflow reaches completion.
+        # Resume the same graph thread for each node interrupt.
         while result.get("__interrupt__"):
-            interrupt_info = result["__interrupt__"][0].value
+            interrupts = result["__interrupt__"]
+            interrupt_info = interrupts[0].value
             _print_interrupt(interrupt_info)
 
             answer = input("\nYour response (or type 'quit' to stop): ").strip()
             if answer.casefold() == "quit":
-                print("Trip planning paused. You can resume this thread using its thread ID:",
-                      config["configurable"]["thread_id"])
+                print(
+                    "Trip planning paused. You can resume this thread using its "
+                    f"thread ID: {config['configurable']['thread_id']}"
+                )
                 return
             if not answer:
                 print("Please enter a response so I can continue.")

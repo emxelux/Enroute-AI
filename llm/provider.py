@@ -27,11 +27,12 @@ def create_chat_model_pair(task: str, groq_default: str):
     groq_model = os.getenv(f"GROQ_{task}_MODEL", groq_default)
     gemini_model = os.getenv(
         f"GEMINI_{task}_MODEL",
-        os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
     )
 
-    groq = init_chat_model(f"groq:{groq_model}")
-    gemini = init_chat_model(f"google_genai:{gemini_model}")
+    # Limit max_tokens to avoid Groq OTPM rate limits (qwen/qwen3.8-27b has 1000 OTPM)
+    groq = init_chat_model(f"groq:{groq_model}", max_tokens=800)
+    gemini = init_chat_model(f"google_genai:{gemini_model}", max_tokens=800)
 
     if os.getenv("LLM_PRIMARY_PROVIDER", "groq").strip().lower() == "gemini":
         return gemini, groq

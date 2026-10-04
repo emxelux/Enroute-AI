@@ -44,6 +44,13 @@ class TravelInfo(TypedDict):
     hotel_location: Annotated[Optional[str], ..., "Hotel location, if accommodation is needed."]
     hotel_check_in: Annotated[Optional[str], ..., "Hotel check-in date, YYYY-MM-DD."]
     hotel_check_out: Annotated[Optional[str], ..., "Hotel check-out date, YYYY-MM-DD."]
+    hotel_adults: Annotated[Optional[int], ..., "Number of adult hotel guests, if stated."]
+    hotel_children_ages: Annotated[Optional[list[int]], ..., "Ages of child hotel guests, if stated."]
+    hotel_management_action: Annotated[Optional[str], ..., "One of detail, cancel, change for an existing hotel booking; otherwise null."]
+    hotel_booking_reference: Annotated[Optional[str], ..., "Hotelbeds booking reference for a management request."]
+    hotel_change_hotel_code: Annotated[Optional[int], ..., "Hotelbeds hotel code for requested booking change, if supplied."]
+    hotel_change_room_code: Annotated[Optional[str], ..., "Hotelbeds room code for requested booking change, if supplied."]
+    hotel_change_rate_key: Annotated[Optional[str], ..., "Hotelbeds rate key for requested booking change, if supplied."]
     missing_information: Annotated[Optional[str], ..., "Question requesting all missing trip details."]
 
 
@@ -111,23 +118,36 @@ def supervisor_node(state: TravelState) -> dict:
         except Exception as exc:
             return {
                 "error": f"Travel information extraction failed: {exc}",
-                "messages": [AIMessage(content="I couldn't process those trip details. Please try again.")],
+                "messages": [AIMessage(content=f"I couldn't process those trip details. Please try again. /n Error: {exc}")],
             }
 
         needs_flight = travel_info["needs_flight"]
         needs_hotel = travel_info["needs_hotel"]
+        management_action = (travel_info.get("hotel_management_action") or "").strip().casefold()
+        is_management = management_action in {"detail", "cancel", "change"}
         missing_flight = needs_flight and any(
             travel_info.get(field) in (None, "", "MISSING")
             for field in ("flight_origin", "flight_destination", "flight_departure_date")
         )
-        missing_hotel = needs_hotel.get("MISSING", False)
+        missing_hotel = not is_management and (needs_hotel.get("MISSING", False) or (
+            needs_hotel.get("needs_accomodation", False)
+            and any(
+                travel_info.get(field) in (None, "", "MISSING")
+                for field in ("hotel_location", "hotel_check_in", "hotel_check_out")
+            )
+        ))
+        missing_booking_reference = is_management and not travel_info.get("hotel_booking_reference")
 
-        if not missing_flight and not missing_hotel:
+        if not missing_flight and not missing_hotel and not missing_booking_reference:
             break
 
         answer = interrupt({
             "type": "missing_information",
-            "question": travel_info.get("missing_information") or "Please provide the missing trip details.",
+            "question": (
+                "Please provide the Hotelbeds booking reference for this detail, cancellation, or change request."
+                if missing_booking_reference
+                else travel_info.get("missing_information") or "Please provide the missing trip details."
+            ),
         })
         conversation.append(HumanMessage(content=str(answer)))
 
@@ -136,6 +156,11 @@ def supervisor_node(state: TravelState) -> dict:
         "needs_flight": needs_flight,
         "needs_hotel": needs_hotel["needs_accomodation"],
         "thread_id": thread_id,
+        "hotel_management_action": management_action if is_management else None,
+        "hotel_booking_reference": travel_info.get("hotel_booking_reference"),
+        "hotel_change_hotel_code": travel_info.get("hotel_change_hotel_code"),
+        "hotel_change_room_code": travel_info.get("hotel_change_room_code"),
+        "hotel_change_rate_key": travel_info.get("hotel_change_rate_key"),
     }
     if needs_flight:
         result.update({
@@ -149,5 +174,7 @@ def supervisor_node(state: TravelState) -> dict:
             "hotel_location": travel_info["hotel_location"],
             "hotel_check_in": travel_info["hotel_check_in"],
             "hotel_check_out": travel_info["hotel_check_out"],
+            "hotel_adults": travel_info.get("hotel_adults") or 1,
+            "hotel_children_ages": travel_info.get("hotel_children_ages") or [],
         })
     return result

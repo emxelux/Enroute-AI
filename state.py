@@ -30,10 +30,21 @@ class TravelState(MessagesState):
     flight_selected: Optional[
         Dict
     ] = None
+
+    flight_booked: Optional[
+        Dict
+    ] = None
+
+    flight_order: Optional[
+        Dict
+    ] = None
+
     hotel_location: Optional[str] = None
     hotel_check_in: Optional[str] = None
     hotel_check_out: Optional[str] = None
     hotel_guests: Optional[int] = None
+    hotel_adults: Optional[int] = None
+    hotel_children_ages: Optional[List[int]] = None
 
     hotel_results: Optional[
         List[Dict]
@@ -42,6 +53,16 @@ class TravelState(MessagesState):
     hotel_selected: Optional[
         Dict
     ] = None
+
+    hotel_rate_checked: Optional[Dict] = None
+    hotel_guest_details: Optional[Dict[str, Any]] = None
+    hotel_booked: Optional[Dict[str, Any]] = None
+    hotel_booking_reference: Optional[str] = None
+    hotel_booking_status: Optional[str] = None
+    hotel_management_action: Optional[str] = None
+    hotel_change_hotel_code: Optional[int] = None
+    hotel_change_room_code: Optional[str] = None
+    hotel_change_rate_key: Optional[str] = None
 
     current_agent: Optional[str] = None
 

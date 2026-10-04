@@ -60,6 +60,12 @@ flowchart TB
 | **Payment** | Takes over once the supervisor has all the information it needs |
 | **External services** | Third-party providers behind the sub-agents and payment (proposed, not in the original sketch) |
 
+### Hotelbeds sandbox
+
+Hotel availability and booking use the pinned `vmavromatis/hotel-api-sdk-python` SDK and its test endpoint only (`https://api.test.hotelbeds.com/hotel-api`). Configure sandbox credentials in the local environment as `HOTELBEDS_API_KEY` and `HOTELBEDS_SECRET`. The client signs each request with the Hotelbeds SHA-256 signature scheme; the API key and secret are never put in prompts or tool arguments. No live endpoint is configured.
+
+Hotel flow: availability search → option selection → rate recheck → explicit user confirmation → guest details → booking. Existing bookings can be looked up by reference; cancellation and booking changes require separate confirmation, and changes are simulated before an update. The SDK does not provide a booking-list operation, so an existing booking reference is required. Sandbox data may be limited; no booking is created or changed during tests.
+
 ---
 
 ## 2. Authentication flow
