@@ -1,10 +1,9 @@
+from langchain.chat_models import init_chat_model
 from tools.flight_tool import search_flight
-from llm.provider import create_chat_model_pair
 
 
-flight_llm, flight_fallback_llm = create_chat_model_pair(
-    "flight",
-    groq_default="openai/gpt-oss-20b",
+llm = init_chat_model(
+    "groq:openai/gpt-oss-120b"
 )
 
-# flight_llm = llm.bind_tools([search_flight])
+flight_llm = llm.bind_tools([search_flight])

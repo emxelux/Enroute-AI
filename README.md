@@ -1,6 +1,6 @@
 # AI Travel Agent: System Design
 
-A **travel-only** conversational agent. Users sign in, describe a trip in natural language, and a **supervisor agent** delegates to specialised **flight** and **hotel** sub-agents. When enough information has been gathered, the user is taken to **payment**.
+A **travel-only** conversational agent. Users sign in, describe a trip in natural language, and a **supervisor agent** delegates to specialised **flight** and **hotel** sub-agents. When enough information has been gathered, (**Human in the loop asks the user for more information if there are missing information**) and then the the user is taken to **payment**.
 
 > It is deliberately *not* a general-purpose chatbot: non-travel queries are turned away.
 
@@ -62,9 +62,9 @@ flowchart TB
 
 ### Hotelbeds sandbox
 
-Hotel availability and booking use the pinned `vmavromatis/hotel-api-sdk-python` SDK and its test endpoint only (`https://api.test.hotelbeds.com/hotel-api`). Configure sandbox credentials in the local environment as `HOTELBEDS_API_KEY` and `HOTELBEDS_SECRET`. The client signs each request with the Hotelbeds SHA-256 signature scheme; the API key and secret are never put in prompts or tool arguments. No live endpoint is configured.
+Hotel availability and booking use direct HTTP requests to the Hotelbeds test endpoint only (`https://api.test.hotelbeds.com/hotel-api/1.0`). Configure sandbox credentials in the local environment as `HOTELBEDS_API_KEY` and `HOTELBEDS_SECRET`. Each request sends `Api-key` and an `X-Signature` calculated as the lowercase hexadecimal SHA-256 digest of the API key, secret, and current Unix timestamp in seconds concatenated without separators. The API key and secret are never put in prompts or tool arguments. No live endpoint is configured.
 
-Hotel flow: availability search → option selection → rate recheck → explicit user confirmation → guest details → booking. Existing bookings can be looked up by reference; cancellation and booking changes require separate confirmation, and changes are simulated before an update. The SDK does not provide a booking-list operation, so an existing booking reference is required. Sandbox data may be limited; no booking is created or changed during tests.
+Hotel flow: availability search → option selection → rate recheck → explicit user confirmation → guest details → booking. Existing bookings can be looked up by reference; cancellation and booking changes require separate confirmation, and changes are simulated before an update. An existing booking reference is required for booking management. Sandbox data may be limited; no booking is created or changed during tests.
 
 ---
 
@@ -170,6 +170,8 @@ The original sketch does not name technologies. This is a suggested fit:
 | Deployment | Docker, AWS (EC2 and RDS) or GCP |
 
 ### LLM provider fallback
+
+LangSmith tracing is disabled by default so the application does not wait for an unreachable tracing endpoint. Set `AI_TRAVEL_LANGSMITH_TRACING=true` to enable tracing when LangSmith is available and configured.
 
 The agents use Groq as the primary provider and retry a request with Gemini when Groq reports a rate limit or quota exhaustion (HTTP 429). Set `GROQ_API_KEY` and either `GOOGLE_API_KEY` or `GEMINI_API_KEY` in the environment. To make Gemini primary instead, set `LLM_PRIMARY_PROVIDER=gemini`.
 

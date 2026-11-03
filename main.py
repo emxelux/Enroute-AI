@@ -1,126 +1,116 @@
-import os
-import uuid
+# main.py
+import atexit
+import argparse
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from agents.graph import create_travel_graph, create_postgres_checkpointer
 
-from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.postgres import PostgresSaver
-from langgraph.types import Command
-
-from agents.graph import create_travel_graph
-
-load_dotenv()
+travel_graph = None
+_postgres_context = None
+_postgres_entered = False
 
 
-def _print_interrupt(interrupt_value: dict) -> None:
-    """Display an interrupt prompt and any options supplied by a graph node."""
-    print(f"\n{interrupt_value.get('question', 'More information is needed.')}")
+def _close_postgres_checkpointer():
+    global _postgres_context, _postgres_entered
+    if _postgres_context is not None and _postgres_entered:
+        _postgres_context.__exit__(None, None, None)
+    _postgres_context = None
+    _postgres_entered = False
 
-    options = interrupt_value.get("options")
-    if not options:
-        return
-
-    if isinstance(options, dict):
-        option_items = options.items()
-    elif isinstance(options, list):
-        option_items = enumerate(options, start=1)
-    else:
-        print(options)
-        return
-
-    for option_id, option in option_items:
-        if interrupt_value.get("type") == "flight_selection" and isinstance(option, dict):
-            route_parts = []
-            for slice_info in option.get("slices", []):
-                origin = slice_info.get("origin", {}).get("code", "?")
-                destination = slice_info.get("destination", {}).get("code", "?")
-                departure = slice_info.get("departure") or "time unavailable"
-                arrival = slice_info.get("arrival") or "time unavailable"
-                route_parts.append(
-                    f"{origin} → {destination} ({departure}–{arrival})"
-                )
-
-            route = "; ".join(route_parts) or "Route unavailable"
-            price = (
-                f"{option.get('total_amount', '?')} "
-                f"{option.get('total_currency', '')}"
-            ).strip()
-
-            print(f"- {option_id}: {route} | {price}")
-        elif isinstance(option, dict):
-            description = (
-                option.get("label")
-                or option.get("name")
-                or option.get("description")
-                or option
-            )
-            print(f"- {option_id}: {description}")
-        else:
-            print(f"- {option_id}: {option}")
-
-
-def _print_result(result: dict) -> None:
-    """Print the latest assistant response and selected flight, if present."""
-    print("\n--- TRIP PLANNING RESULT ---")
-
-    for message in reversed(result.get("messages", [])):
-        content = getattr(message, "content", None)
-        if content and message.__class__.__name__ == "AIMessage":
-            print(content)
-            break
-
-    selected = result.get("flight_selected")
-    if selected:
-        print("\nSelected flight:")
-        print(f"Offer ID: {selected.get('offer_id', 'unknown')}")
-        print(
-            f"Price: {selected.get('total_amount', '?')} "
-            f"{selected.get('total_currency', '')}"
-        )
-
-
-def main() -> None:
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("DATABASE_URL is not configured in the environment.")
-
-    initial_request = input("What trip would you like to plan? ").strip()
-    if not initial_request:
-        print("Please enter a trip request to get started.")
-        return
-
-    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-
-    with PostgresSaver.from_conn_string(database_url) as checkpointer:
+def get_graph():
+    global travel_graph, _postgres_context, _postgres_entered
+    if travel_graph is not None:
+        return travel_graph
+    
+    try:
+        # from_conn_string() returns a context manager; keep it open for the
+        # lifetime of the compiled graph and close it during interpreter exit.
+        _postgres_context = create_postgres_checkpointer()
+        checkpointer = _postgres_context.__enter__()
+        _postgres_entered = True
         checkpointer.setup()
-        graph = create_travel_graph(checkpointer=checkpointer)
+        travel_graph = create_travel_graph(checkpointer)
+        atexit.register(_close_postgres_checkpointer)
+        print("✅ Using PostgreSQL checkpointer")
+    except Exception as e:
+        _close_postgres_checkpointer()
+        print(f"⚠️ PostgreSQL unavailable ({e}); using in-memory checkpoints")
+        travel_graph = create_travel_graph()
+    
+    return travel_graph
 
-        print("\n--- STARTING TRIP PLANNER ---")
-        result = graph.invoke(
-            {"messages": [HumanMessage(content=initial_request)]},
-            config=config,
-        )
+def run_chat(message: str, thread_id: str = "default", user_country: str = "US"):
+    graph = get_graph()
+    
+    initial_state = {
+        "messages": [HumanMessage(content=message)],
+        "user_id": "cli_user",
+        "user_country": user_country,
+    }
 
-        # Resume the same graph thread for each node interrupt.
-        while result.get("__interrupt__"):
-            interrupts = result["__interrupt__"]
-            interrupt_info = interrupts[0].value
-            _print_interrupt(interrupt_info)
+    config = {"configurable": {"thread_id": thread_id}}
+    
+    result = graph.invoke(initial_state, config=config)
+    
+    # Get the last user-facing AI message (not an internal tool response).
+    messages = result.get("messages", [])
+    tool_messages = [msg for msg in messages if isinstance(msg, ToolMessage)]
+    last_ai_msg = ""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            last_ai_msg = msg.content
+            break
+            
+    print(f"\n--- Agent: {result.get('current_agent')} ---")
+    print(last_ai_msg)
+    # print("\n--- State ---")
+    # print(f"trip_complete: {bool(result.get('trip_complete'))}")
+    # print(f"flight_selected: {result.get('flight_selected') is not None}")
+    # print(f"hotel_selected: {result.get('hotel_selected') is not None}")
+    flight_options_found = result.get("flight_results") is not None or any(
+        msg.name == "search_flight" for msg in tool_messages
+    )
+    hotel_options_found = result.get("hotel_results") is not None or any(
+        msg.name == "search_hotels" for msg in tool_messages
+    )
+    print(f"flight_options_found: {flight_options_found}")
+    print(f"hotel_options_found: {hotel_options_found}")
+    print(f"trip_details: {result.get('trip_details')}")
 
-            answer = input("\nYour response (or type 'quit' to stop): ").strip()
-            if answer.casefold() == "quit":
-                print(
-                    "Trip planning paused. You can resume this thread using its "
-                    f"thread ID: {config['configurable']['thread_id']}"
-                )
-                return
-            if not answer:
-                print("Please enter a response so I can continue.")
+    return result
+
+
+def run_interactive_chat(thread_id: str = "default", user_country: str = "US"):
+    """Keep accepting human responses on the same checkpointed conversation."""
+    print("TripMate CLI - Type 'exit' or press Ctrl+C to quit")
+    while True:
+        try:
+            message = input("\nYou: ").strip()
+            if not message:
                 continue
-
-            result = graph.invoke(Command(resume=answer), config=config)
-
-        _print_result(result)
-
+            if message.lower() in {"exit", "quit"}:
+                print("Bye!")
+                return
+            run_chat(message, thread_id=thread_id, user_country=user_country)
+        except (KeyboardInterrupt, EOFError):
+            print("\nBye!")
+            return
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="TripMate CLI")
+    parser.add_argument("message", nargs="?", help="Your travel request e.g. 'I want to go to Paris'")
+    parser.add_argument("--thread-id", default="default", help="Conversation thread ID to keep memory")
+    parser.add_argument("--country", default="US", help="User country for currency")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Process the supplied message and exit without prompting for follow-ups",
+    )
+
+    args = parser.parse_args()
+
+    if not args.message:
+        run_interactive_chat(thread_id=args.thread_id, user_country=args.country)
+    else:
+        run_chat(args.message, thread_id=args.thread_id, user_country=args.country)
+        if not args.once:
+            run_interactive_chat(thread_id=args.thread_id, user_country=args.country)

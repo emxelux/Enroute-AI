@@ -9,6 +9,15 @@ from langchain.chat_models import init_chat_model
 
 load_dotenv()
 
+# LangSmith tracing is opt-in so an unavailable tracing endpoint cannot slow
+# down or clutter normal application runs. Enable it with
+# AI_TRAVEL_LANGSMITH_TRACING=true when tracing is desired.
+_langsmith_tracing_enabled = (
+    os.getenv("AI_TRAVEL_LANGSMITH_TRACING", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+os.environ["LANGSMITH_TRACING"] = "true" if _langsmith_tracing_enabled else "false"
+
 logger = logging.getLogger(__name__)
 
 # langchain-google-genai reads GOOGLE_API_KEY. Accept GEMINI_API_KEY as well.

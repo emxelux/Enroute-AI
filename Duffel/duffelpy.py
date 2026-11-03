@@ -5,11 +5,22 @@ Minimal Duffel API client built on `requests` (targets API version v2).
 
     from duffel_client import Duffel
     duffel = Duffel()                      # reads DUFFEL_ACCESS_TOKEN
+
+    # Flights
     res = duffel.create_offer_request(
         slices=[{"origin": "LOS", "destination": "LHR", "departure_date": "2026-11-10"}],
         passengers=[{"type": "adult"}],
     )
     offers = res["offers"]
+
+    # Hotels
+    hotel_offers = duffel.create_hotel_offer_request(
+        check_in_date="2026-11-10",
+        check_out_date="2026-11-15",
+        location="LHR",
+        passengers=[{"type": "adult"}],
+        rooms=1,
+    )
 
 Conventions
 - Every method returns the unwrapped `data` payload as plain dicts / lists.
@@ -27,6 +38,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import requests
 
 BASE_URL = "https://api.duffel.com/"
+STAYS_BASE_URL = "https://api.duffel.com/stays/"
 DEFAULT_VERSION = "v2"
 _RETRY_STATUSES = {429, 502, 503, 504}
 
@@ -51,6 +63,7 @@ class Duffel:
         access_token: Optional[str] = None,
         api_version: str = DEFAULT_VERSION,
         base_url: str = BASE_URL,
+        stays_base_url: str = STAYS_BASE_URL,
         timeout: float = 60.0,  # offer searches can take up to ~20s+ on the API side
         max_retries: int = 3,
         session: Optional[requests.Session] = None,
@@ -59,6 +72,7 @@ class Duffel:
         if not token:
             raise ValueError("Provide access_token or set DUFFEL_ACCESS_TOKEN")
         self.base_url = base_url.rstrip("/")
+        self.stays_base_url = stays_base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
         self.session = session or requests.Session()
@@ -73,9 +87,9 @@ class Duffel:
         )
 
     # ------------------------------------------------------------------ core
-    def _request(self, method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None) -> dict:
+    def _request(self, method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None, base_url: Optional[str] = None) -> dict:
         """Send a request, retry transient failures, return the full JSON envelope."""
-        url = f"{self.base_url}{path}"
+        url = f"{(base_url or self.base_url)}{path}"
         payload = {"data": body} if body is not None else None
         attempt = 0
         while True:
@@ -99,15 +113,15 @@ class Duffel:
             raise DuffelError(resp.status_code, js.get("errors", []), resp.headers.get("x-request-id"), js)
         return js
 
-    def _data(self, method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None):
-        return self._request(method, path, params, body).get("data")
+    def _data(self, method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None, base_url: Optional[str] = None):
+        return self._request(method, path, params, body, base_url).get("data")
 
-    def _paginate(self, path: str, params: Optional[dict] = None, limit: int = 50) -> Iterator[dict]:
+    def _paginate(self, path: str, params: Optional[dict] = None, limit: int = 50, base_url: Optional[str] = None) -> Iterator[dict]:
         if not 1 <= limit <= 200:
             raise ValueError("limit must be between 1 and 200")
         params = dict(params or {}, limit=limit)
         while True:
-            js = self._request("GET", path, params)
+            js = self._request("GET", path, params, base_url=base_url)
             for item in js.get("data", []):
                 yield item
             after = (js.get("meta") or {}).get("after")
@@ -337,6 +351,135 @@ class Duffel:
     def suggest_places(self, query: str) -> List[dict]:
         """GET /places/suggestions: city/airport lookup by free text (not in the old library)."""
         return self._data("GET", "/places/suggestions", {"query": query})
+
+    # ----------------------------------------------------------------- hotels
+    def create_hotel_offer_request(
+        self,
+        check_in_date: str,
+        check_out_date: str,
+        location: str,
+        passengers: List[dict],
+        rooms: int = 1,
+        hotel_chain: Optional[str] = None,
+        max_price_per_night: Optional[str] = None,
+        currency: str = "GBP",
+        amenities: Optional[List[str]] = None,
+        radius: Optional[int] = None,
+        radius_unit: str = "km",
+    ) -> dict:
+        """
+        POST /accommodation/offer_requests: Search for hotel offers.
+
+        Args:
+            check_in_date: Check-in date in YYYY-MM-DD format
+            check_out_date: Check-out date in YYYY-MM-DD format
+            location: location of the hotel (city, address)
+            passengers: List of passenger dicts with "type" (adult/child) and optional "age" for children
+            rooms: Number of rooms (default 1)
+            hotel_chain: Optional hotel chain code to filter by
+            max_price_per_night: Optional max price per night as string (e.g., "200.00")
+            currency: Currency code (default "GBP")
+            amenities: Optional list of amenity codes to filter by
+            radius: Search radius from location
+            radius_unit: "km" or "mi" (default "km")
+        """
+        body: Dict[str, Any] = {
+            "check_in_date": check_in_date,
+            "check_out_date": check_out_date,
+            "location": location,
+            "passengers": passengers,
+            "rooms": rooms,
+            "currency": currency,
+        }
+        if hotel_chain:
+            body["hotel_chain"] = hotel_chain
+        if max_price_per_night:
+            body["max_price_per_night"] = max_price_per_night
+        if amenities:
+            body["amenities"] = amenities
+        if radius:
+            body["radius"] = radius
+            body["radius_unit"] = radius_unit
+        return self._data("POST", "/accommodation/offer_requests", body=body, base_url=self.stays_base_url)
+
+    def get_hotel_offer_request(self, offer_request_id: str) -> dict:
+        """GET /accommodation/offer_requests/{id}"""
+        return self._data("GET", f"/accommodation/offer_requests/{offer_request_id}", base_url=self.stays_base_url)
+
+    def list_hotel_offer_requests(self, limit: int = 50) -> Iterator[dict]:
+        return self._paginate("/accommodation/offer_requests", limit=limit, base_url=self.stays_base_url)
+
+    def list_hotel_offers(
+        self,
+        offer_request_id: str,
+        sort: Optional[str] = None,  # e.g. "total_amount", "-total_amount", "rating"
+        limit: int = 50,
+    ) -> Iterator[dict]:
+        """GET /accommodation/offers with offer_request_id filter"""
+        params = {"offer_request_id": offer_request_id, "sort": sort}
+        return self._paginate("/accommodation/offers", params, limit, base_url=self.stays_base_url)
+
+    def get_hotel_offer(self, offer_id: str) -> dict:
+        """GET /accommodation/offers/{id}"""
+        return self._data("GET", f"/accommodation/offers/{offer_id}", base_url=self.stays_base_url)
+
+    def create_hotel_order(
+        self,
+        selected_offers: List[str],  # exactly one offer id
+        passengers: List[dict],      # each needs id from offer request + full details
+        payments: Optional[List[dict]] = None,
+        metadata: Optional[dict] = None,
+        hold: bool = True,
+    ) -> dict:
+        """
+        POST /accommodation/orders: Book a hotel offer.
+
+        Args:
+            selected_offers: List with exactly one hotel offer ID
+            passengers: Passenger details (must include 'id' from offer request)
+            payments: Required if hold=False. List of {type, amount, currency}
+            metadata: Optional metadata
+            hold: True = hold order, False = instant booking (requires payment)
+        """
+        if len(selected_offers) != 1:
+            raise ValueError("selected_offers must contain exactly one offer id")
+        body: Dict[str, Any] = {
+            "type": "hold" if hold else "instant",
+            "selected_offers": selected_offers,
+            "passengers": passengers,
+        }
+        if not hold:
+            if not payments:
+                raise ValueError("payments are required unless hold=True")
+            body["payments"] = payments
+        if metadata:
+            body["metadata"] = metadata
+        return self._data("POST", "/accommodation/orders", body=body, base_url=self.stays_base_url)
+
+    def get_hotel_order(self, order_id: str) -> dict:
+        """GET /accommodation/orders/{id}"""
+        return self._data("GET", f"/accommodation/orders/{order_id}", base_url=self.stays_base_url)
+
+    def list_hotel_orders(self, limit: int = 50) -> Iterator[dict]:
+        return self._paginate("/accommodation/orders", limit=limit, base_url=self.stays_base_url)
+
+    def create_hotel_payment(self, order_id: str, payment: dict) -> dict:
+        """POST /accommodation/payments: Pay for a hold hotel order."""
+        return self._data("POST", "/accommodation/payments", body={"order_id": order_id, "payment": payment}, base_url=self.stays_base_url)
+
+    def get_hotel(self, hotel_id: str) -> dict:
+        """GET /accommodation/hotels/{id}"""
+        return self._data("GET", f"/accommodation/hotels/{hotel_id}", base_url=self.stays_base_url)
+
+    def list_hotels(
+        self,
+        location: Optional[str] = None,
+        hotel_chain: Optional[str] = None,
+        limit: int = 50,
+    ) -> Iterator[dict]:
+        """GET /accommodation/hotels with optional filters"""
+        params = _clean({"location": location, "hotel_chain": hotel_chain})
+        return self._paginate("/accommodation/hotels", params, limit, base_url=self.stays_base_url)
 
 
 def _clean(d: Optional[dict]) -> Optional[dict]:

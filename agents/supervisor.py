@@ -1,180 +1,228 @@
-from typing import Annotated, Optional
-import uuid
-
-from dotenv import load_dotenv
-from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langgraph.types import interrupt
-from typing_extensions import TypedDict
+"""
+Supervisor Agent - Entry point for all user queries.
+Classifies intent and routes to appropriate sub-agents.
+"""
+import re
+from typing import Literal
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langgraph.types import Command
 
 from state import TravelState
-from llm.provider import create_chat_model_pair, invoke_with_rate_limit_fallback
+from llm.flight_llm import flight_llm
+from llm.hotel_llm import hotel_llm
 from tools.tavily_tool import tavily_search
+from typing_extensions import TypedDict, Annotated
 
-load_dotenv()
-
-base_llm, fallback_llm = create_chat_model_pair(
-    "supervisor",
-    groq_default="qwen/qwen3.8-27b",
-)
-
-with open("prompts/travel_classifier.md", "r", encoding="utf-8") as file:
-    TRAVEL_CLASSIFIER_PROMPT = file.read()
-
-with open("prompts/extraction_prompt.md", "r", encoding="utf-8") as file:
-    TRAVEL_EXTRACTOR_PROMPT = file.read()
-
+# Initialize the supervisor LLM
 
 class ClassifyQuery(TypedDict):
-    is_travel: Annotated[bool, ..., "Whether the request is travel-related."]
+    is_travel: Annotated[bool, ..., "Is the query a travel related topic or not"]
 
 
-class NeedHotel(TypedDict):
-    MISSING: Annotated[bool, ..., "Whether hotel requirements still need clarification."]
-    needs_accomodation: Annotated[bool, ..., "Whether accommodation is needed."]
+c_llm = init_chat_model("groq:openai/gpt-oss-20b")
+supervisor_llm = init_chat_model("groq:openai/gpt-oss-120b")
+classifier_llm = c_llm.with_structured_output(ClassifyQuery)
 
+with open("prompts/travel_classifier.md", "r") as f:
+    TRAVEL_CLASSIFIER_PROMPT = f.read()
 
-class TravelInfo(TypedDict):
-    needs_flight: Annotated[bool, ..., "Whether the user needs a flight."]
-    needs_hotel: NeedHotel
-    flight_origin: Annotated[Optional[str], ..., "Origin airport IATA code."]
-    flight_destination: Annotated[Optional[str], ..., "Destination airport IATA code."]
-    flight_departure_date: Annotated[Optional[str], ..., "Flight departure date, YYYY-MM-DD."]
-    flight_return_date: Annotated[Optional[str], ..., "Flight return date, YYYY-MM-DD, if applicable."]
-    hotel_location: Annotated[Optional[str], ..., "Hotel location, if accommodation is needed."]
-    hotel_check_in: Annotated[Optional[str], ..., "Hotel check-in date, YYYY-MM-DD."]
-    hotel_check_out: Annotated[Optional[str], ..., "Hotel check-out date, YYYY-MM-DD."]
-    hotel_adults: Annotated[Optional[int], ..., "Number of adult hotel guests, if stated."]
-    hotel_children_ages: Annotated[Optional[list[int]], ..., "Ages of child hotel guests, if stated."]
-    hotel_management_action: Annotated[Optional[str], ..., "One of detail, cancel, change for an existing hotel booking; otherwise null."]
-    hotel_booking_reference: Annotated[Optional[str], ..., "Hotelbeds booking reference for a management request."]
-    hotel_change_hotel_code: Annotated[Optional[int], ..., "Hotelbeds hotel code for requested booking change, if supplied."]
-    hotel_change_room_code: Annotated[Optional[str], ..., "Hotelbeds room code for requested booking change, if supplied."]
-    hotel_change_rate_key: Annotated[Optional[str], ..., "Hotelbeds rate key for requested booking change, if supplied."]
-    missing_information: Annotated[Optional[str], ..., "Question requesting all missing trip details."]
+with open("prompts/supervisor_prompt.md") as f:
+    SUPERVISOR_PROMPT = f.read()
 
 
 def classify_travel_query(query: str) -> bool:
+    """Classify if query is travel-related."""
     messages = [
         SystemMessage(content=TRAVEL_CLASSIFIER_PROMPT),
-        HumanMessage(content=query),
+        HumanMessage(content=query)
     ]
-    classifier = base_llm.with_structured_output(ClassifyQuery)
-    fallback_classifier = fallback_llm.with_structured_output(ClassifyQuery)
-    response = invoke_with_rate_limit_fallback(
-        classifier,
-        fallback_classifier,
-        messages,
-    )
+    response = classifier_llm.invoke(messages)
     return response["is_travel"]
 
 
-def get_today_date() -> str:
-    """Return today's date in YYYY-MM-DD format."""
-    from datetime import date
-
-    return date.today().isoformat()
-
-
-def extract_travel_information(messages: list):
-    extractor = create_agent(
-        model=base_llm,
-        tools=[get_today_date, tavily_search],
-        response_format=TravelInfo,
-        system_prompt=TRAVEL_EXTRACTOR_PROMPT,
-    )
-    fallback_extractor = create_agent(
-        model=fallback_llm,
-        tools=[get_today_date, tavily_search],
-        response_format=TravelInfo,
-        system_prompt=TRAVEL_EXTRACTOR_PROMPT,
-    )
-    agent_input = {"messages": messages}
-    response = invoke_with_rate_limit_fallback(
-        extractor,
-        fallback_extractor,
-        agent_input,
-    )
-    return response["structured_response"]
-
-
-def supervisor_node(state: TravelState) -> dict:
-    """Extract trip details, asking for clarification until required data exists."""
-    thread_id = str(uuid.uuid4())
-    conversation = list(state.get("messages", []))
-    latest_message = conversation[-1] if conversation else None
-    latest_query = getattr(latest_message, "content", None)
-    if latest_query is None and isinstance(latest_message, dict):
-        latest_query = latest_message.get("content", "")
-
-    if not classify_travel_query(str(latest_query or "")):
-        return {
-            "messages": [AIMessage(content="Sorry, I'm a travel-only assistant. Please ask a travel-related question.")]
-        }
-
-    while True:
-        try:
-            travel_info = extract_travel_information(conversation)
-        except Exception as exc:
-            return {
-                "error": f"Travel information extraction failed: {exc}",
-                "messages": [AIMessage(content=f"I couldn't process those trip details. Please try again. /n Error: {exc}")],
-            }
-
-        needs_flight = travel_info["needs_flight"]
-        needs_hotel = travel_info["needs_hotel"]
-        management_action = (travel_info.get("hotel_management_action") or "").strip().casefold()
-        is_management = management_action in {"detail", "cancel", "change"}
-        missing_flight = needs_flight and any(
-            travel_info.get(field) in (None, "", "MISSING")
-            for field in ("flight_origin", "flight_destination", "flight_departure_date")
-        )
-        missing_hotel = not is_management and (needs_hotel.get("MISSING", False) or (
-            needs_hotel.get("needs_accomodation", False)
-            and any(
-                travel_info.get(field) in (None, "", "MISSING")
-                for field in ("hotel_location", "hotel_check_in", "hotel_check_out")
-            )
-        ))
-        missing_booking_reference = is_management and not travel_info.get("hotel_booking_reference")
-
-        if not missing_flight and not missing_hotel and not missing_booking_reference:
+def supervisor_node(state: TravelState) -> Command[Literal["flight_agent", "hotel_agent", "payment_agent", "__end__"]]:
+    """
+    Supervisor node - routes to appropriate agent based on trip state.
+    """
+    # Get the last user message
+    messages = state.get("messages", [])
+    last_user_msg = None
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            last_user_msg = msg.content
             break
 
-        answer = interrupt({
-            "type": "missing_information",
-            "question": (
-                "Please provide the Hotelbeds booking reference for this detail, cancellation, or change request."
-                if missing_booking_reference
-                else travel_info.get("missing_information") or "Please provide the missing trip details."
-            ),
-        })
-        conversation.append(HumanMessage(content=str(answer)))
+    if not last_user_msg:
+        return Command(goto="__end__", update={"messages": [AIMessage(content="How can I help you with your travel plans?")]})
 
-    result = {
-        "messages": conversation + [AIMessage(content="Travel information extracted successfully.")],
+    # Short replies (airport codes, city names, preferences, confirmations) are
+    # travel-related when they answer an outstanding travel question.
+    pending_agent = state.get("current_agent")
+    pending_travel = pending_agent in {"flight_agent", "hotel_agent"} or bool(
+        state.get("needs_flight") or state.get("needs_hotel")
+    )
+
+    # First, classify if travel-related unless this is an in-progress reply.
+    if not pending_travel and not classify_travel_query(last_user_msg):
+        return Command(
+            goto="__end__",
+            update={
+                "messages": [AIMessage(content="I'm a travel-only assistant. I can help you with flights, hotels, and trip planning. For other questions, please use a general-purpose assistant.")]
+            }
+        )
+
+    # Build context for supervisor decision
+    # State defaults are False, so infer requested services from the current
+    # message instead of interpreting missing extraction as "nothing to book".
+    needs_flight = state.get("needs_flight", False) or bool(re.search(
+        r"\b(flight|flights|fly|flying|airfare|plane|travel|trip)\b",
+        last_user_msg,
+        re.IGNORECASE,
+    ))
+    needs_hotel = state.get("needs_hotel", False) or bool(re.search(
+        r"\b(hotel|accommodation|accommodations|lodging)\b",
+        last_user_msg,
+        re.IGNORECASE,
+    ))
+    trip_details = {
+        **(state.get("trip_details") or {}),
+        "user_request": last_user_msg,
         "needs_flight": needs_flight,
-        "needs_hotel": needs_hotel["needs_accomodation"],
-        "thread_id": thread_id,
-        "hotel_management_action": management_action if is_management else None,
-        "hotel_booking_reference": travel_info.get("hotel_booking_reference"),
-        "hotel_change_hotel_code": travel_info.get("hotel_change_hotel_code"),
-        "hotel_change_room_code": travel_info.get("hotel_change_room_code"),
-        "hotel_change_rate_key": travel_info.get("hotel_change_rate_key"),
+        "needs_hotel": needs_hotel,
     }
-    if needs_flight:
-        result.update({
-            "flight_origin": travel_info["flight_origin"],
-            "flight_destination": travel_info["flight_destination"],
-            "flight_departure_date": travel_info["flight_departure_date"],
-            "flight_return_date": travel_info["flight_return_date"],
-        })
-    if needs_hotel["needs_accomodation"]:
-        result.update({
-            "hotel_location": travel_info["hotel_location"],
-            "hotel_check_in": travel_info["hotel_check_in"],
-            "hotel_check_out": travel_info["hotel_check_out"],
-            "hotel_adults": travel_info.get("hotel_adults") or 1,
-            "hotel_children_ages": travel_info.get("hotel_children_ages") or [],
-        })
-    return result
+    flight_booked = state.get("flight_selected") is not None
+    hotel_booked = state.get("hotel_selected") is not None
+    user_country = state.get("user_country", "US")
+
+    # Continue with the sub-agent that asked the last clarification. That
+    # agent receives the complete message history, including the new reply.
+    if pending_agent == "flight_agent" and needs_flight:
+        return Command(
+            goto="flight_agent",
+            update={
+                "current_agent": "flight_agent",
+                "needs_flight": needs_flight,
+                "needs_hotel": needs_hotel,
+                "trip_details": trip_details,
+            },
+        )
+    if pending_agent == "hotel_agent" and needs_hotel:
+        return Command(
+            goto="hotel_agent",
+            update={
+                "current_agent": "hotel_agent",
+                "needs_flight": needs_flight,
+                "needs_hotel": needs_hotel,
+                "trip_details": trip_details,
+            },
+        )
+
+    # Determine what's needed from the query
+    # This is a simplified version - in production, use LLM to parse
+    flight_details_complete = all([
+        state.get("flight_origin"),
+        state.get("flight_destination"),
+        state.get("flight_departure_date"),
+    ])
+
+    hotel_details_complete = all([
+        state.get("hotel_location"),
+        state.get("hotel_check_in"),
+        state.get("hotel_check_out"),
+    ])
+
+    # Decision logic
+    if not flight_booked and needs_flight and not flight_details_complete:
+        return Command(
+            goto="flight_agent",
+            update={
+                "current_agent": "flight_agent",
+                "needs_flight": needs_flight,
+                "needs_hotel": needs_hotel,
+                "trip_details": trip_details,
+            }
+        )
+
+    if not hotel_booked and needs_hotel and not hotel_details_complete:
+        return Command(
+            goto="hotel_agent",
+            update={
+                "current_agent": "hotel_agent",
+                "needs_flight": needs_flight,
+                "needs_hotel": needs_hotel,
+                "trip_details": trip_details,
+            }
+        )
+
+    if needs_flight and not flight_booked and flight_details_complete:
+        return Command(
+            goto="flight_agent",
+            update={
+                "current_agent": "flight_agent",
+                "needs_flight": needs_flight,
+                "needs_hotel": needs_hotel,
+                "trip_details": trip_details,
+            }
+        )
+
+    if needs_hotel and not hotel_booked and hotel_details_complete:
+        return Command(
+            goto="hotel_agent",
+            update={
+                "current_agent": "hotel_agent",
+                "needs_flight": needs_flight,
+                "needs_hotel": needs_hotel,
+                "trip_details": trip_details,
+            }
+        )
+
+    # Only proceed to payment when a service was actually selected. In
+    # particular, unset request flags must never imply that the trip is done.
+    if (flight_booked or not needs_flight) and (hotel_booked or not needs_hotel):
+        if flight_booked or hotel_booked:
+            return Command(
+                goto="payment_agent",
+                update={
+                    "current_agent": "payment_agent",
+                    "ready_for_payment": True,
+                    "needs_flight": needs_flight,
+                    "needs_hotel": needs_hotel,
+                    "trip_details": trip_details,
+                }
+            )
+
+    # Need clarification
+    clarification_msg = _generate_clarification_message(state)
+    return Command(
+        goto="__end__",
+        update={"messages": [AIMessage(content=clarification_msg)]}
+    )
+
+
+def _generate_clarification_message(state: TravelState) -> str:
+    """Generate a clarification message based on missing information."""
+    missing = []
+
+    if state.get("needs_flight") and not state.get("flight_selected"):
+        if not state.get("flight_origin"):
+            missing.append("departure city/airport")
+        if not state.get("flight_destination"):
+            missing.append("destination city/airport")
+        if not state.get("flight_departure_date"):
+            missing.append("departure date")
+        if not state.get("flight_passengers"):
+            missing.append("number of passengers")
+
+    if state.get("needs_hotel") and not state.get("hotel_selected"):
+        if not state.get("hotel_location"):
+            missing.append("hotel location/city")
+        if not state.get("hotel_check_in"):
+            missing.append("check-in date")
+        if not state.get("hotel_check_out"):
+            missing.append("check-out date")
+
+    if missing:
+        return f"I need a few more details to help you: {', '.join(missing)}. Could you please provide these?"
+
+    return "Let me help you with that. What would you like to do next?"

@@ -1,7 +1,4 @@
-"""
-Payment Agent - Handles payment processing for booked travel.
-Placeholder for now - integrate with Duffel Payments, Stripe, etc.
-"""
+"""Payment stage guard for travel selections that have not been booked."""
 from typing import Literal
 from langchain_core.messages import SystemMessage, AIMessage
 from langgraph.types import Command
@@ -9,24 +6,16 @@ from langgraph.types import Command
 from state import TravelState
 
 
-PAYMENT_AGENT_PROMPT = """You are the Payment Agent. Process payment for the user's booked travel.
+PAYMENT_AGENT_PROMPT = """You are the Payment Agent. The application cannot process payments yet.
 
-Current booking:
+Current selection (not a confirmed booking):
 - Flight: {flight_details}
 - Hotel: {hotel_details}
 - Total estimated cost: {total_cost}
 - User country: {user_country}
 
-Instructions:
-1. Present the total cost in user's currency
-2. Ask for payment confirmation
-3. Process payment (integrate with payment provider)
-4. Confirm booking completion
-
-For now, this is a placeholder. In production, integrate with:
-- Duffel Payments
-- Stripe
-- Or other payment provider"""
+Do not claim a booking or payment was completed. Clearly tell the user that
+the selection is retained but no reservation or charge was made."""
 
 
 def payment_agent_node(state: TravelState) -> Command[Literal["supervisor", "__end__"]]:
@@ -53,19 +42,20 @@ def payment_agent_node(state: TravelState) -> Command[Literal["supervisor", "__e
         user_country=user_country
     ))
 
-    # For now, just inform user and mark complete
     message = AIMessage(content=(
-        f"Your trip is ready for payment:\n"
+        f"Your travel selections are saved, but the trip is not booked:\n"
         f"✈️ Flight: {flight_details}\n"
         f"🏨 Hotel: {hotel_details}\n\n"
-        f"Payment integration coming soon. Your booking details have been saved."
+        "No reservation or payment was made. Booking and payment processing "
+        "are not available in this app yet."
     ))
 
     return Command(
         goto="__end__",
         update={
             "messages": [system_msg, message],
-            "trip_complete": True,
-            "current_agent": "complete"
+            "trip_complete": False,
+            "ready_for_payment": False,
+            "current_agent": "payment_unavailable"
         }
     )

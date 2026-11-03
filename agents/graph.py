@@ -1,135 +1,99 @@
 """
-Main LangGraph workflow
+Main LangGraph workflow - wires together supervisor, flight, hotel, and payment agents.
 """
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.memory import MemorySaver
+
 from state import TravelState
-from agents.supervisor import supervisor_node
-from agents.flight_agent import (
-    flight_agent_node,
-    flight_selection_node,
-    flight_booking_confirm_node,
-    flight_booking_node,
-)
-from agents.hotel_agent import (
-    hotel_agent_node,
-    hotel_selection_node,
-    hotel_rate_check_node,
-    hotel_booking_confirm_node,
-    hotel_booking_node,
-    hotel_management_node,
-)
+from agents.supervisor import supervisor_node, classify_travel_query
+from agents.flight_agent import flight_agent_node, flight_tools_node
+from agents.hotel_agent import hotel_agent_node, hotel_tools_node
+from agents.payment_agent import payment_agent_node
 
 
-def _after_flight(state):
-    return "hotel_agent" if state.get("needs_hotel") else END
+def create_travel_graph(checkpointer=None):
+    """
+    Create the travel agent workflow graph.
 
-def create_travel_graph(checkpointer):
+    Args:
+        checkpointer: LangGraph checkpointer (PostgresSaver for production, MemorySaver for dev)
+
+    Returns:
+        Compiled graph
+    """
     graph = StateGraph(TravelState)
 
     # Add nodes
     graph.add_node("supervisor", supervisor_node)
     graph.add_node("flight_agent", flight_agent_node)
-    graph.add_node("flight_selection", flight_selection_node)
-    graph.add_node("flight_booking_confirm", flight_booking_confirm_node)
-    graph.add_node("flight_booking", flight_booking_node)
+    graph.add_node("flight_tools", flight_tools_node)
     graph.add_node("hotel_agent", hotel_agent_node)
-    graph.add_node("hotel_selection", hotel_selection_node)
-    graph.add_node("hotel_rate_check", hotel_rate_check_node)
-    graph.add_node("hotel_booking_confirm", hotel_booking_confirm_node)
-    graph.add_node("hotel_booking", hotel_booking_node)
-    graph.add_node("hotel_management", hotel_management_node)
+    graph.add_node("hotel_tools", hotel_tools_node)
+    graph.add_node("payment_agent", payment_agent_node)
 
     # Add edges
     graph.add_edge(START, "supervisor")
-    graph.add_conditional_edges(
-        "supervisor",
-        lambda state: (
-            "flight_agent" if state.get("needs_flight")
-            else "hotel_agent" if state.get("needs_hotel") or state.get("hotel_management_action")
-            else END
-        ),
-        {"flight_agent": "flight_agent", "hotel_agent": "hotel_agent", END: END},
-    )
-    graph.add_edge("flight_agent", "flight_selection")
-    graph.add_conditional_edges(
-        "flight_selection",
-        lambda state: (
-            _after_flight(state)
-            if state.get("current_agent") == "flight_complete"
-            else state.get("current_agent", "flight_booking_confirm")
-        ),
-        {
-            "flight_booking_confirm": "flight_booking_confirm",
-            "flight_agent": "flight_agent",
-            "hotel_agent": "hotel_agent",
-            END: END,
-        },
-    )
-    graph.add_conditional_edges(
-        "flight_booking_confirm",
-        lambda state: (
-            _after_flight(state)
-            if state.get("current_agent") == "flight_complete"
-            else state.get("current_agent", "flight_booking")
-        ),
-        {
-            "flight_booking": "flight_booking",
-            "flight_selection": "flight_selection",
-            "hotel_agent": "hotel_agent",
-            END: END,
-        },
-    )
-    graph.add_conditional_edges(
-        "flight_booking",
-        _after_flight,
-        {"hotel_agent": "hotel_agent", END: END},
-    )
 
-    graph.add_conditional_edges(
-        "hotel_agent",
-        lambda state: state.get("current_agent", "hotel_selection"),
-        {
-            "hotel_selection": "hotel_selection",
-            "hotel_management": "hotel_management",
-            "hotel_complete": END,
-        },
-    )
-    graph.add_edge("hotel_management", END)
-    graph.add_conditional_edges(
-        "hotel_selection",
-        lambda state: state.get("current_agent", "hotel_rate_check"),
-        {
-            "hotel_rate_check": "hotel_rate_check",
-            "hotel_agent": "hotel_agent",
-            "hotel_complete": END,
-        },
-    )
-    graph.add_conditional_edges(
-        "hotel_rate_check",
-        lambda state: state.get("current_agent", "hotel_booking_confirm"),
-        {
-            "hotel_booking_confirm": "hotel_booking_confirm",
-            "hotel_selection": "hotel_selection",
-        },
-    )
-    graph.add_conditional_edges(
-        "hotel_booking_confirm",
-        lambda state: state.get("current_agent", "hotel_booking"),
-        {
-            "hotel_booking": "hotel_booking",
-            "hotel_selection": "hotel_selection",
-            "hotel_complete": END,
-        },
-    )
-    graph.add_conditional_edges(
-        "hotel_booking",
-        lambda state: state.get("current_agent", "hotel_complete"),
-        {
-            "hotel_booking": "hotel_booking",
-            "hotel_booking_confirm": "hotel_booking_confirm",
-            "hotel_selection": "hotel_selection",
-            "hotel_complete": END,
-        },
-    )
+    # Supervisor routes to agents - handled by Command in supervisor_node
+    # Flight agent -> tools -> flight_agent (loop) or supervisor
+    graph.add_edge("flight_tools", "flight_agent")
+    # Hotel agent -> tools -> hotel_agent (loop) or supervisor
+    graph.add_edge("hotel_tools", "hotel_agent")
+    # Payment agent -> END (handled by Command in payment_agent_node)
+
+    # Compile with checkpointer
+    if checkpointer is None:
+        checkpointer = MemorySaver()
 
     return graph.compile(checkpointer=checkpointer)
+
+
+def create_postgres_checkpointer():
+    """Create PostgreSQL checkpointer for production."""
+    import os
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise ValueError("DATABASE_URL not set")
+    return PostgresSaver.from_conn_string(database_url)
+
+
+# For development/testing
+travel_graph = create_travel_graph()
+
+
+def run_travel_agent(user_message: str, thread_id: str = "default", user_id: str = None, user_country: str = "US"):
+    """
+    Run the travel agent with a user message.
+
+    Args:
+        user_message: User's input
+        thread_id: Conversation thread ID
+        user_id: User ID from authentication
+        user_country: User's country for currency conversion
+
+    Returns:
+        Final state after processing
+    """
+    from langchain_core.messages import HumanMessage
+
+    config = {"configurable": {"thread_id": thread_id}}
+
+    initial_state = {
+        "messages": [HumanMessage(content=user_message)],
+        "user_id": user_id,
+        "user_country": user_country,
+    }
+
+    result = travel_graph.invoke(initial_state, config=config)
+    return result
+
+
+if __name__ == "__main__":
+    # Test the graph
+    print("Testing travel agent graph...")
+    result = run_travel_agent("I want to fly from Lagos to Abuja next Friday")
+    print(f"Messages: {result.get('messages', [])}")
+    print(f"Current agent: {result.get('current_agent')}")
+    print(f"Needs flight: {result.get('needs_flight')}")
+    print(f"Flight origin: {result.get('flight_origin')}")

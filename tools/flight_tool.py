@@ -128,7 +128,7 @@ def search_flight(
         key=lambda offer: float(offer.get("total_amount") or "inf")
     )
 
-    return [_compact_offer(offer, offer_request_passengers) for offer in relevant_flights[:3]]
+    return [_compact_offer(offer, offer_request_passengers) for offer in relevant_flights[:5]]
 
 # ans = search_flight(origin_airport = "ABV", 
 # destination_airport="MAN", 
@@ -139,7 +139,7 @@ def search_flight(
 #     with open("flight_out.json", "w") as f:
 #         json.dump(ans, f, indent=4)
 
-
+# @tool
 def book_flight(
     offer_id: str,
     passengers: list[dict],
@@ -149,7 +149,6 @@ def book_flight(
 ) -> dict:
     """
     Book a flight offer using Duffel's order creation API (API v2).
-
     Args:
         offer_id: The ID of the offer to book
         passengers: List of passenger details. Each must include:
@@ -232,7 +231,7 @@ def build_passenger_for_booking(
 
     return passenger
 
-
+# @tool
 def build_payment(
     payment_type: str,
     amount: str,
